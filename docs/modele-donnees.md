@@ -8,12 +8,13 @@ Ce document décrit les tables PostgreSQL du projet et la façon dont elles gara
 - **Aucune demande n'est supprimée.** Un brouillon abandonné passe à l'état final `ABANDONNEE` (H10), ce qui préserve l'historique. **Aucun justificatif n'est supprimé** non plus : les révisions y font référence.
 - **La date courante est passée en paramètre aux services** (`maintenant`) : l'heure réelle pour les actions des utilisateurs. La commande d'expiration reçoit deux dates distinctes : `dateSimulee` (la date passée à `--date`, jamais antérieure à l'heure réelle), qui sert uniquement à sélectionner les échéances, et `maintenant` (l'heure réelle), qui date les événements. `events.created_at` est donc toujours l'heure réelle, et la date simulée est enregistrée dans `details`. Dater les événements de la date simulée créerait des événements datés dans le futur, et une action réelle faite ensuite apparaîtrait avant eux dans l'historique (H22).
 - Les transactions utilisent le niveau d'isolation par défaut de PostgreSQL, `READ COMMITTED`. Les mises à jour conditionnelles de la section 4 reposent sur son comportement.
+- **Accès en SQL brut** avec le pilote `pg` : requêtes toujours paramétrées (`$1`, `$2`…), jamais construites en concaténant du texte. Une interface TypeScript par table ; les fonctions d'accès convertissent les lignes (colonnes en `snake_case`) vers ces interfaces. `updated_at` est écrit explicitement dans chaque `UPDATE` (avec `maintenant`). Le schéma est créé par des migrations SQL numérotées (§ 8).
 
 ---
 
 ## 1. Vue d'ensemble
 
-Dix tables, plus la table de session créée par `connect-pg-simple`. Le diagramme reprend toutes les tables, toutes leurs colonnes et toutes leurs clés étrangères.
+Dix tables, plus la table de session créée par `connect-pg-simple` et la table technique `schema_migrations` du script de migration (§ 8). Le diagramme reprend toutes les tables, toutes leurs colonnes et toutes leurs clés étrangères.
 
 ```mermaid
 erDiagram
@@ -210,7 +211,7 @@ Le mode est défini par la variable d'environnement `BANK_MODE` (`SUCCES` par d�
 
 | Garantie | Mécanisme | Scénario du cahier |
 |---|---|---|
-| **R6** — une seule demande en cours par compte | Index unique partiel sur `requests(account_id)`, limité aux statuts `SOUMISE`, `COMPLEMENT_DEMANDE`, `ATTENTE_SUPERVISEUR`, `APPROUVEE`, `ACTIVE`. Une violation (`P2002`) devient un HTTP 409. | Deux soumissions concurrentes ne créent qu'une demande en cours. |
+| **R6** — une seule demande en cours par compte | Index unique partiel sur `requests(account_id)`, limité aux statuts `SOUMISE`, `COMPLEMENT_DEMANDE`, `ATTENTE_SUPERVISEUR`, `APPROUVEE`, `ACTIVE`. Une violation (erreur PostgreSQL `23505`) devient un HTTP 409. | Deux soumissions concurrentes ne créent qu'une demande en cours. |
 | **H1** — un seul brouillon par compte | Index unique partiel sur `requests(account_id)`, limité au statut `BROUILLON`. | Une répétition d'appel de l'agent ne crée pas deux demandes. |
 | **R7** — confirmation liée aux paramètres | Soumission par mise à jour conditionnelle sur le montant et la durée affichés, et sur la version transmise sans être affichée (§ 4.1). | Un double clic ou une confirmation ancienne est refusé. |
 | **R11** — version périmée refusée | Chaque transition est une mise à jour conditionnelle sur la version lue ; 0 ligne modifiée = HTTP 409 (§ 4.2). | Une action depuis un écran ancien est refusée. |
@@ -221,36 +222,39 @@ Le mode est défini par la variable d'environnement `BANK_MODE` (`SUCCES` par d�
 
 Les règles de contenu (R1 à R5, R8 à R10) sont vérifiées par le domaine avant toute écriture, et couvertes par des tests unitaires. R12 et R13 sont portées par la table des transitions du domaine, testée de la même façon. Les garanties de ce tableau qui reposent sur la base (R6, R7, R11, R14) sont couvertes par des tests d'API.
 
-**Déclaration des index partiels (Prisma 7.4, preview `partialIndexes`)**
+**Déclaration des index partiels et de la séquence (migration `001_modele_initial.sql`)**
 
-```prisma
-model Request {
-  // …
-  @@unique([accountId], map: "uq_demande_en_cours",
-           where: raw("statut IN ('SOUMISE','COMPLEMENT_DEMANDE','ATTENTE_SUPERVISEUR','APPROUVEE','ACTIVE')"))
-  @@unique([accountId], map: "uq_brouillon_unique", where: raw("statut = 'BROUILLON'"))
-}
+```sql
+-- R6 : une seule demande en cours par compte.
+CREATE UNIQUE INDEX uq_demande_en_cours ON requests (account_id)
+  WHERE statut IN ('SOUMISE', 'COMPLEMENT_DEMANDE', 'ATTENTE_SUPERVISEUR', 'APPROUVEE', 'ACTIVE');
+
+-- H1 : un seul brouillon par compte.
+CREATE UNIQUE INDEX uq_brouillon_unique ON requests (account_id)
+  WHERE statut = 'BROUILLON';
+
+-- H13 : numéro des références, tiré à la première soumission. Une seule séquence, jamais remise à zéro.
+CREATE SEQUENCE demande_reference_seq;
 ```
-
-Repli si le flag pose problème : création des deux index dans une migration SQL écrite à la main (`prisma migrate dev --create-only`).
 
 ### 4.1 Soumission confirmée (R7)
 
 La soumission n'est acceptée que si la demande a encore **le montant et la durée** que le client a vus, et **la version** que le formulaire ou la carte de confirmation a transmise sans l'afficher. Le contrôle et le changement d'état tiennent en une seule mise à jour conditionnelle :
 
 ```ts
-const { count } = await tx.request.updateMany({
-  where: {
-    id: demandeId,
-    clientId: session.clientId,                                // périmètre
-    statut: { in: ['BROUILLON', 'COMPLEMENT_DEMANDE'] },
-    version: confirmation.version,                             // version transmise, non affichée
-    plafondDemande: confirmation.plafond,                      // montant affiché
-    dureeJours: confirmation.duree,                            // durée affichée
-  },
-  data: { statut: 'SOUMISE', version: { increment: 1 }, submittedAt: maintenant /* … */ },
-});
-if (count !== 1) throw new ConfirmationARenouvelerError(); // HTTP 409
+// tx : la connexion fournie par la fonction de transaction.
+const { rowCount } = await tx.query(
+  `UPDATE requests
+      SET statut = 'SOUMISE', version = version + 1, submitted_at = $6, updated_at = $6 -- …
+    WHERE id = $1
+      AND client_id = $2                                -- périmètre
+      AND statut IN ('BROUILLON', 'COMPLEMENT_DEMANDE')
+      AND version = $3                                  -- version transmise, non affichée
+      AND plafond_demande = $4                          -- montant affiché
+      AND duree_jours = $5`,                            // durée affichée
+  [demandeId, session.clientId, confirmation.version, confirmation.plafond, confirmation.duree, maintenant],
+);
+if (rowCount !== 1) throw new ConfirmationARenouvelerError(); // HTTP 409
 ```
 
 La révision et l'événement sont écrits dans la même transaction. À la première soumission, la référence est tirée de la séquence dans cette même transaction (H13). Toute modification du contenu, en brouillon comme pendant un complément, incrémente la version : une confirmation ancienne ne peut donc pas valider une autre opération. En cas de double clic, la seconde requête trouve une version déjà changée et ne modifie rien.
@@ -262,17 +266,16 @@ Chaque décision suit le même principe : mise à jour conditionnelle sur l'iden
 ### 4.3 Activation et reprise
 
 ```ts
-const { count } = await tx.request.updateMany({
-  where: { id: demandeId, statut: 'APPROUVEE' },
-  data: {
-    statut: 'ACTIVE',
-    activationStatut: 'REUSSIE',
-    version: { increment: 1 },
-    dateActivation: resultat.appliqueLe,                       // H17 : date enregistrée par la banque
-    dateEcheance: ajouterHeures(resultat.appliqueLe, duree * 24), // H8
-  },
-});
-// count = 0 : une autre reprise a déjà activé le plafond, rien à faire
+const { rowCount } = await tx.query(
+  `UPDATE requests
+      SET statut = 'ACTIVE', activation_statut = 'REUSSIE', version = version + 1,
+          date_activation = $2,                         -- H17 : date enregistrée par la banque
+          date_echeance = $3,                           -- H8
+          updated_at = $4
+    WHERE id = $1 AND statut = 'APPROUVEE'`,
+  [demandeId, resultat.appliqueLe, ajouterHeures(resultat.appliqueLe, duree * 24), maintenant],
+);
+// rowCount = 0 : une autre reprise a déjà activé le plafond, rien à faire
 ```
 
 L'appel à la banque utilise toujours la clé `act-<id du dossier>`. Le bouton « Relancer » rejoue l'appel avec cette même clé : même en cas de double clic, la banque n'applique l'opération qu'une fois, et la demande ne passe à Active qu'une fois.
@@ -280,13 +283,16 @@ L'appel à la banque utilise toujours la clé `act-<id du dossier>`. Le bouton �
 **Un échec tardif n'écrase jamais un succès.** L'enregistrement d'un échec porte la même condition que celui d'un succès :
 
 ```ts
-await tx.request.updateMany({
-  where: { id: demandeId, statut: 'APPROUVEE' },               // comme pour le succès
-  data: { activationStatut: 'INCONNU', derniereErreur: message },
-});
+await tx.query(
+  `UPDATE requests
+      SET activation_statut = 'INCONNU', derniere_erreur = $2, updated_at = $3
+    WHERE id = $1 AND statut = 'APPROUVEE'             -- comme pour le succès
+  `,
+  [demandeId, message, maintenant],
+);
 ```
 
-Exemple : l'appel d'origine attend une réponse perdue, une reprise réussit entre-temps et la demande passe à Active. Quand l'appel d'origine expire, la demande n'est plus Approuvée : rien n'est modifié, et l'écran reste exact. La désactivation suit la même règle, avec la condition `statut: 'ACTIVE'`.
+Exemple : l'appel d'origine attend une réponse perdue, une reprise réussit entre-temps et la demande passe à Active. Quand l'appel d'origine expire, la demande n'est plus Approuvée : rien n'est modifié, et l'écran reste exact. La désactivation suit la même règle, avec la condition `statut = 'ACTIVE'`.
 
 ---
 
@@ -331,3 +337,23 @@ Les conversations ne sont pas enregistrées dans les tables métier. Les dernier
 Le jeu de données est créé **par les services métier**, et non par des insertions directes : la demande d'Inès suit le vrai parcours (brouillon, confirmation, soumission, recommandation), comme celle de Mehdi (brouillon, confirmation, soumission). Son historique est donc identique à celui d'une demande créée dans l'application.
 
 Toutes les identités, tous les comptes et tous les mots de passe sont fictifs. Les identifiants de connexion sont documentés dans le README.
+
+---
+
+## 8. Accès aux données et migrations
+
+**Accès aux données.** Le pilote `pg` est utilisé directement, sans ORM :
+- Un **pool de connexions**, créé dans un service NestJS et fermé à l'arrêt de l'application.
+- Une **fonction de transaction** : elle prend une connexion du pool, exécute `BEGIN`, appelle le code fourni avec cette connexion (`tx`), puis `COMMIT` ; en cas d'erreur, `ROLLBACK`, et l'erreur est relancée. La connexion est toujours rendue au pool. Toutes les requêtes d'une transaction passent par `tx`, jamais par le pool.
+- **Requêtes toujours paramétrées** (`$1`, `$2`…). Aucune requête n'est construite en concaténant du texte ; les noms de tables et de colonnes sont écrits en dur.
+- **Une interface TypeScript par table** (par exemple `Demande` pour `requests`). Les fonctions d'accès convertissent chaque ligne (`plafond_demande`) vers l'interface (`plafondDemande`) : le reste du code ne manipule jamais une ligne brute. `pg` renvoie un `bigint` sous forme de texte : `events.id` est converti explicitement.
+- Une violation d'unicité est reconnue par le code d'erreur PostgreSQL **`23505`** et le nom de la contrainte (`uq_demande_en_cours`, `uq_brouillon_unique`…).
+
+**Migrations.** Des fichiers SQL numérotés dans `api/migrations/` : `001_modele_initial.sql`, `002_….sql`… Un fichier appliqué n'est jamais modifié : toute évolution passe par un nouveau fichier.
+
+Le script `npm run migrate` (code compilé) :
+1. crée la table `schema_migrations` (`nom` en clé primaire, `appliquee_le`) si elle n'existe pas ;
+2. lit les fichiers de `api/migrations/` dans l'ordre de leur numéro ;
+3. pour chaque fichier absent de `schema_migrations`, exécute son contenu **et** l'enregistre dans `schema_migrations`, dans une même transaction : une migration est appliquée entièrement ou pas du tout.
+
+Le même script sert en local, dans Docker (au démarrage du conteneur) et dans la CI. Il n'ajoute aucune dépendance.

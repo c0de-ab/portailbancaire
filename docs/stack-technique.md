@@ -15,10 +15,12 @@ Le projet repose sur une stack **simple, cohérente et entièrement en TypeScrip
 | | API REST | Toutes les routes sous le préfixe `/api` (`setGlobalPrefix('api')`). Une route par action métier : `POST /api/demandes/:id/soumettre`, `/approuver`, `/rejeter`, `/recommander`, `/annuler`… |
 | | Erreurs | Format unique `{ erreurs: [{ code, champ, message }] }`, avec le code de la règle ; `champ` est facultatif (une erreur de version ne porte sur aucun champ). La soumission renvoie toutes les erreurs à la fois. 422 contenu invalide (R1 à R5, R10) ; 409 conflit d'état ou de version (R6, R7, R11, R12, R13, transition impossible) ; 403 l'acteur n'a pas le droit (R8, R9, rôle refusé par le guard) ; 404 dossier hors périmètre (R14). |
 | | `class-validator` + `ValidationPipe` | Validation de toutes les entrées, avec l'outil standard de NestJS. |
-| **Domaine** | Fonctions TypeScript pures | Règles R1 à R14, seuils et table des transitions, sans dépendance à NestJS ni à Prisma : faciles à tester. Chaque règle a un code, renvoyé dans les erreurs de l'API et utilisé par l'agent pour expliquer un refus. |
+| **Domaine** | Fonctions TypeScript pures | Règles de contenu (R1 à R5, R8 à R10), seuils et table des transitions (dont R12 et R13), sans dépendance à NestJS ni à la base : faciles à tester. R6, R7, R11 et R14 sont garanties par la base (voir CLAUDE.md, règle 1). Chaque règle a un code, renvoyé dans les erreurs de l'API et utilisé par l'agent pour expliquer un refus. |
 | **Données** | PostgreSQL 16 | Base persistante. |
-| | Prisma 7 (7.4 ou plus) | Accès aux données, migrations et jeu de démonstration. Deux index uniques partiels, déclarés avec la fonctionnalité en preview `partialIndexes` ; repli prévu : migration SQL écrite à la main (`prisma migrate dev --create-only`). |
+| | SQL brut avec le pilote `pg` | Accès aux données sans ORM : un pool de connexions dans un service NestJS et une fonction de transaction (`BEGIN`, `COMMIT`, `ROLLBACK`). Requêtes toujours paramétrées ; une interface TypeScript par table, et la conversion des lignes dans les fonctions d'accès. Les index uniques partiels et la séquence des références sont écrits directement en SQL. Voir « Pourquoi du SQL brut ». |
+| | Migrations SQL numérotées | Fichiers `api/migrations/001_….sql`, appliqués par `npm run migrate` (code compilé), qui note les fichiers déjà appliqués dans la table `schema_migrations`. Le même script sert en local, dans Docker et dans la CI. |
 | **Sécurité** | Sessions serveur (`express-session` + `connect-pg-simple`) | Exigé par le cahier : « Les identités et autorisations viennent de la session serveur. » Cookie `httpOnly`, `SameSite=Strict`, `Secure` en production. |
+| | Requêtes paramétrées | Toutes les valeurs passent par `$1`, `$2`… ; aucune requête n'est construite en concaténant du texte, ce qui empêche l'injection SQL. Les noms de colonnes sont écrits en dur, jamais tirés d'une entrée. |
 | | Même origine | L'API sert le frontend construit ; en développement, Vite redirige `/api` vers le backend. Avec `SameSite=Strict`, un site tiers ne peut pas envoyer de requête accompagnée de la session : c'est la protection contre le CSRF. |
 | | Guards NestJS + filtre de périmètre | Un guard vérifie les rôles ; le périmètre (ses comptes, son portefeuille, son équipe) est ajouté dans chaque requête SQL. Un dossier hors périmètre renvoie 404. Les outils de l'agent passent par les mêmes services. |
 | | Argon2id (`argon2`) | Hachage des mots de passe. |
@@ -46,6 +48,10 @@ Le projet repose sur une stack **simple, cohérente et entièrement en TypeScrip
 
 NestJS impose une structure proche de Spring Boot (modules, controllers, services, injection de dépendances), ce qui rend le code prévisible. L'injection de dépendances permet de remplacer le modèle IA et la banque par des versions de test, et les guards centralisent le contrôle des rôles. Les règles métier restent dans des fonctions pures, indépendantes du framework.
 
+## Pourquoi du SQL brut
+
+Les garanties critiques du projet reposent sur PostgreSQL lui-même : index uniques partiels (R6, H1), mises à jour conditionnelles vérifiées par le nombre de lignes modifiées (R7, R11), séquence des références (H13) et transactions. Écrites en SQL, elles se lisent exactement comme elles s'exécutent, sans traduction par un ORM ni fonctionnalité en preview. Le pilote `pg` suffit : aucune génération de code, aucun moteur à embarquer dans l'image Docker, aucune option expérimentale pour les tests. En contrepartie, les types des lignes sont écrits à la main (une interface par table), et chaque requête doit être paramétrée : c'est une règle de sécurité du projet.
+
 ## Ce qui garantit la fiabilité
 
 - **Un seul chemin vers les règles :** les routes REST, les outils de l'agent et la commande d'expiration passent tous par les mêmes services. L'agent n'a donc aucun pouvoir de plus qu'un formulaire.
@@ -56,6 +62,7 @@ NestJS impose une structure proche de Spring Boot (modules, controllers, service
 
 | Élément | Pourquoi il n'est pas nécessaire ici |
 |---|---|
+| ORM ou générateur de requêtes | Les garanties reposent sur du SQL précis (index partiels, `UPDATE` conditionnels, séquence) : un ORM le traduirait sans rien apporter aux scénarios. Voir « Pourquoi du SQL brut ». |
 | Worker de reprise automatique | Le cahier exige qu'une reprise soit *possible* sans double activation : le bouton « Relancer » et la clé fixe y répondent. |
 | Tâche planifiée | Le cahier autorise une commande de démonstration reproductible, plus simple à montrer. |
 | Table de clés d'idempotence HTTP | Le double clic est déjà couvert : la version pour la soumission et les décisions, l'index unique pour les demandes, la clé fixe pour la banque. |

@@ -1,0 +1,13 @@
+// Schéma Prisma. Les tables seront ajoutées à l'étape du modèle de données
+// (voir docs/modele-donnees.md). L'adresse de la base est dans prisma.config.ts.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // NestJS et Jest fonctionnent en CommonJS.
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}

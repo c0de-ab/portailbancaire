@@ -1,0 +1,70 @@
+# Intégration continue : voir la section « Intégration continue » de CLAUDE.md.
+# Aucun secret n'est nécessaire : l'IA tourne en mode simulé.
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: portail
+          POSTGRES_PASSWORD: portail
+          # Le service crée directement la base de test.
+          POSTGRES_DB: portail_test
+        ports:
+          - 5432:5432
+        # Les migrations ne démarrent pas avant que la base soit prête.
+        options: >-
+          --health-cmd "pg_isready -U portail -d portail_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      # Prisma 7 ne charge pas les fichiers .env : même valeur que api/.env.test.
+      DATABASE_URL: postgresql://portail:portail@localhost:5432/portail_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npx prisma migrate deploy
+      - run: npm run test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Détecte au plus tôt un Dockerfile cassé.
+      - run: docker build -t portail .

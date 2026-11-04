@@ -54,14 +54,17 @@ Depuis la racine :
 - `docker compose exec app npm run expire -- --date <date>` : expiration dans le conteneur
 
 Dans `api/` :
-- `npm run test` : tests unitaires et tests d'API. **PostgreSQL doit tourner** ; les tests utilisent une base séparée, définie dans `api/.env.test`
-- `npm run lint` : ESLint et Prettier
+- Avant le premier lancement : copier `.env.example` (racine) en `api/.env`, qui n'est pas versionné
+- `npm run start:dev` : API en développement sur le port 3000, avec rechargement automatique
+- `npm run test` : tests unitaires et tests d'API. **PostgreSQL doit tourner** ; les tests utilisent une base séparée, définie dans `api/.env.test`. Jest est lancé avec `node --experimental-vm-modules`, nécessaire au moteur de Prisma 7 : l'avertissement `ExperimentalWarning` est attendu
+- `npm run lint` : ESLint et Prettier ; `npm run format` corrige la mise en forme
 - `npx prisma migrate dev` : applique les migrations
 - `npm run build` puis `npm run expire -- --date <date>` : expire les plafonds dont l'échéance est passée à cette date. Le script exécute uniquement le code compilé (`node dist/...`) et ne le compile jamais lui-même, pour fonctionner à l'identique dans le conteneur ; en local, lancer `npm run build` avant. Une date antérieure à l'heure réelle est refusée (H22)
 
 Dans `web/` :
-- `npm run dev` : frontend en développement (Vite redirige `/api` vers le backend)
-- `npm run lint` : ESLint et Prettier
+- `npm run dev` : frontend en développement sur le port 5173 (Vite redirige `/api` vers le backend)
+- `npm run build` : frontend construit dans `web/dist`, servi par l'API
+- `npm run lint` : ESLint et Prettier ; `npm run format` corrige la mise en forme
 
 Dans l'image Docker de production, les outils de développement (`ts-node`, `tsx`) sont absents. Les scripts lancés dans le conteneur (migrations, seed, expiration) utilisent donc le **code compilé** (`node dist/...`), et le CLI `prisma` doit être présent dans l'image pour `prisma migrate deploy`. Vérifier chacune de ces commandes **dans le conteneur** dès l'étape du squelette.
 

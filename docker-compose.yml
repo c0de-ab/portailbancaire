@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: portail
+      POSTGRES_PASSWORD: portail
+      POSTGRES_DB: portail
+    ports:
+      - '5432:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Crée la base de test au premier lancement (volume vide).
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U portail -d portail']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://portail:portail@db:5432/portail
+      PORT: 3000
+      # Valeur de démonstration, sans valeur réelle : à remplacer hors démonstration.
+      SESSION_SECRET: secret-de-demonstration-factice
+      LLM_MODE: mock
+      DEMO_MODE: 'true'
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

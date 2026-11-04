@@ -41,6 +41,7 @@ web/
     api.ts       appels fetch
     types.ts     statuts et libellés, recopiés de l'API
 docs/
+.github/workflows/ci.yml   intégration continue
 ```
 
 ## Commandes
@@ -63,6 +64,17 @@ Dans `web/` :
 - `npm run lint` : ESLint et Prettier
 
 Dans l'image Docker de production, les outils de développement (`ts-node`, `tsx`) sont absents. Les scripts lancés dans le conteneur (migrations, seed, expiration) utilisent donc le **code compilé** (`node dist/...`), et le CLI `prisma` doit être présent dans l'image pour `prisma migrate deploy`. Vérifier chacune de ces commandes **dans le conteneur** dès l'étape du squelette.
+
+## Intégration continue
+
+- Fichier `.github/workflows/ci.yml`, lancé à chaque push sur `main`. Node.js est installé avec `actions/setup-node`, en lisant la version dans `.nvmrc`.
+- Job `api` : `npm ci`, `prisma generate`, lint, vérification des types (`tsc --noEmit`), migrations (`prisma migrate deploy`), puis `npm run test`.
+- Base de test : un service PostgreSQL 16 qui crée directement `portail_test`, avec un contrôle de santé (`pg_isready`), pour que les migrations ne démarrent pas avant que la base soit prête.
+- Prisma 7 ne charge pas les fichiers `.env` tout seul. Dans la CI, `DATABASE_URL` est défini directement dans le workflow, avec la même valeur que `api/.env.test`. En local, `npm run test` charge explicitement `api/.env.test` ; la base de test est créée par un script d'initialisation de PostgreSQL dans Docker Compose.
+- Job `web` : `npm ci`, lint, vérification des types et `npm run build`.
+- Job `docker` : `docker build`, pour détecter au plus tôt un Dockerfile cassé.
+- Aucun secret n'est nécessaire : l'IA tourne en mode simulé (`LLM_MODE=mock`).
+- Si la CI échoue, corriger avant de continuer.
 
 ## Règles d'architecture
 
@@ -102,8 +114,13 @@ Dans l'image Docker de production, les outils de développement (`ts-node`, `tsx
 ## Sécurité
 
 - Aucun secret dans le code ni dans Git. Deux fichiers d'environnement seulement sont versionnés : `.env.example`, et `api/.env.test`, utilisé par les tests et la CI, qui ne contient que des valeurs de test (adresse de la base de test locale, secret de session factice). Le `.gitignore` ignore tous les autres `.env*`.
-- Mots de passe hachés en Argon2id. Cookie de session `httpOnly`, `SameSite=Strict`.
-- Justificatif : 2 Mo maximum, PDF, JPEG ou PNG, enregistré sous un nom généré (uuid), **jamais** sous le nom envoyé par le client. Jamais transmis au modèle IA. **Aucun fichier n'est jamais supprimé** : les révisions antérieures y font référence.
+- Mots de passe hachés en Argon2id. Cookie de session `httpOnly`, `SameSite=Strict`, `Secure` en production.
+- Session **régénérée à la connexion** (`req.session.regenerate`), détruite à la déconnexion, expirée après 30 minutes d'**inactivité** : `cookie.maxAge` de 30 minutes **et** `rolling: true`, qui repousse l'échéance à chaque requête (`maxAge` seul expirerait 30 minutes après la connexion).
+- Le message d'erreur de connexion est le même pour un e-mail inconnu et un mauvais mot de passe, et **le temps de réponse aussi** : si l'e-mail est inconnu, le mot de passe est quand même vérifié contre un hachage Argon2id factice, calculé au démarrage.
+- En-têtes de sécurité ajoutés par un petit middleware dans `main.ts`, sans dépendance : `X-Content-Type-Options: nosniff`, `Content-Security-Policy: frame-ancestors 'none'` (interdit l'affichage dans un cadre) et `Referrer-Policy: same-origin`.
+- `ValidationPipe` global avec `whitelist: true` et `forbidNonWhitelisted: true`. **Ne jamais passer le corps d'une requête directement à Prisma** : les champs modifiables sont listés explicitement, sinon un client pourrait envoyer `statut` ou `version`. Les arguments des outils de l'agent sont validés de la même façon.
+- Justificatif : 2 Mo maximum, PDF, JPEG ou PNG, enregistré sous un nom généré (uuid), **jamais** sous le nom envoyé par le client. Jamais transmis au modèle IA. Le type est vérifié sur les **premiers octets du fichier** (`%PDF`, signature PNG ou JPEG), pas seulement sur le type annoncé par le navigateur. Le téléchargement passe par une route qui applique le filtre de périmètre, avec `Content-Disposition: attachment` et `X-Content-Type-Options: nosniff`. **Aucun fichier n'est jamais supprimé** : les révisions antérieures y font référence.
+- Les messages de l'agent sont affichés **comme du texte**, jamais comme du HTML (`dangerouslySetInnerHTML` interdit) : la réponse du modèle peut être influencée par un message malveillant.
 - Ne jamais journaliser une clé d'API, un mot de passe ou une conversation complète.
 - Les routes `/api/demo/...`, dont `POST /api/demo/banque/mode`, n'existent que si `DEMO_MODE=true` (activé dans Docker Compose, à `false` par défaut dans les tests sauf ceux qui en ont besoin). Elles sont réservées aux conseillers et aux superviseurs.
 
@@ -136,5 +153,5 @@ Ne pas ajouter sans demande explicite : worker de reprise automatique, tâche pl
 - Avancer par petites étapes. Proposer un plan avant tout changement sur plusieurs fichiers.
 - Après chaque étape, résumer en français, en quelques phrases, ce qui a été fait et pourquoi.
 - Ne pas modifier `docs/` sans le signaler explicitement.
-- Une branche courte par étape du plan (`feat/...`, `test/...`), fusionnée dans `main` par pull request quand la CI est verte.
+- Travail directement sur `main`, par petits commits ; lancer les tests avant chaque push. La CI vérifie chaque push.
 - Messages de commit en Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`). Pas de commit ni de push sans accord.

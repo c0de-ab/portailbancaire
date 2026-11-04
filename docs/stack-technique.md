@@ -36,9 +36,9 @@ Le projet repose sur une stack **simple, cohérente et entièrement en TypeScrip
 | **Tests** | Jest + Supertest (fournis par NestJS) | Tests unitaires des règles et des transitions ; tests d'API sur une base PostgreSQL de test lancée par Docker Compose, y compris la concurrence. La base de test est créée au premier lancement du conteneur `db` par un script d'initialisation (`docker-entrypoint-initdb.d`). |
 | | Procédure de recette | Les 7 scénarios du cahier, décrits pas à pas dans le README. |
 | **Qualité** | ESLint + Prettier | Code homogène et lisible. |
-| | Conventional Commits, branches courtes et pull requests | Historique Git lisible ; chaque branche est fusionnée dans `main` quand la CI est verte, et `main` reste toujours fonctionnelle. |
+| | Conventional Commits, petits commits directement sur `main` | Historique Git lisible ; les tests sont lancés avant chaque push, et la CI vérifie chaque push pour que `main` reste toujours fonctionnelle. |
 | **Livraison** | Docker Compose | `docker compose up` lance la base et l'application, avec les comptes de démonstration, l'IA en mode simulé et le mode démonstration activé (`DEMO_MODE=true`). |
-| | GitHub Actions (CI) | Mise en place dès le premier jour : lint, vérification des types et tests à chaque push et pull request. |
+| | GitHub Actions (CI) | Mise en place dès le premier jour : lint, vérification des types et tests à chaque push sur `main`. Détail dans la section « Intégration continue » de CLAUDE.md. |
 | | `.env.example` | Configuration documentée, sans aucun secret. |
 | **Documentation** | README + Mermaid | Lancement, hypothèses, périmètre réalisé, limites connues, temps consacré ; fournisseur IA (données transmises, délais, erreurs, limites de coût) ; diagrammes d'états et d'architecture ; section « Arbitrages ». |
 

@@ -1,0 +1,16 @@
+# Énoncé de l'évaluation (confidentiel), quelle que soit l'extension
+docs/cahier-des-charges.*
+
+# Environnement : tout est ignoré sauf les deux fichiers sans secret
+.env
+.env.*
+!.env.example
+!api/.env.test
+
+# Réglages personnels de Claude Code
+.claude/settings.local.json
+
+# Dépendances, builds et justificatifs
+node_modules/
+dist/
+api/uploads/

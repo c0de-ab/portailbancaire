@@ -14,7 +14,7 @@ Ce document décrit les tables PostgreSQL du projet et la façon dont elles gara
 
 ## 1. Vue d'ensemble
 
-Dix tables, plus la table de session créée par `connect-pg-simple` et la table technique `schema_migrations` du script de migration (§ 8). Le diagramme reprend toutes les tables, toutes leurs colonnes et toutes leurs clés étrangères.
+Dix tables, plus la table de session utilisée par `connect-pg-simple` (créée par la migration initiale) et la table technique `schema_migrations` du script de migration (§ 8). Le diagramme reprend toutes les tables, toutes leurs colonnes et toutes leurs clés étrangères.
 
 ```mermaid
 erDiagram
@@ -134,7 +134,7 @@ erDiagram
     SESSION {
         string sid PK
         json sess
-        timestamptz expire
+        timestamp expire "timestamp(6), sans fuseau"
     }
 ```
 
@@ -174,7 +174,7 @@ erDiagram
 | Table | Colonnes principales | Rôle |
 |---|---|---|
 | `events` | `id` (`bigserial`), `request_id` (nullable), `reference` (nullable), `actor_id` (nul pour le système), `via_agent`, `action`, `request_version`, `motif`, `details` (`jsonb`, sans secrets), `created_at` ; index sur (`request_id`, `created_at`) | L'**historique** exigé par le cahier : acteur, action, date, référence, version et motif. `actor_id` désigne toujours l'utilisateur pour qui l'action est faite, et `via_agent` indique si elle passe par l'agent : on lit « Amal, via l'agent ». `request_id` est nul pour les événements sans dossier, comme une consultation du plafond ou un refus d'accès. `reference` est nulle pour les événements d'un brouillon (H13). Pour la commande d'expiration, `created_at` est l'heure réelle et la date simulée figure dans `details` (H22). |
-| `session` | `sid`, `sess`, `expire` | Sessions serveur, table créée par `connect-pg-simple`. |
+| `session` | `sid`, `sess`, `expire` ; index `IDX_session_expire` | Sessions serveur de `connect-pg-simple`. La table est créée par la migration `001_modele_initial.sql`, avec exactement la structure du fichier `table.sql` de `connect-pg-simple` : c'est pourquoi `expire` est un `timestamp(6)` sans fuseau, seule exception à la convention `timestamptz`. À l'étape de l'authentification, l'option `createTableIfMissing` de `connect-pg-simple` restera désactivée : l'application ne crée jamais de table. |
 
 ### Banque simulée
 

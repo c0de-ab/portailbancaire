@@ -57,7 +57,7 @@ Depuis la racine :
 Dans `api/` :
 - Avant le premier lancement : copier `.env.example` (racine) en `api/.env`, qui n'est pas versionné
 - `npm run start:dev` : API en développement sur le port 3000, avec rechargement automatique
-- `npm run test` : tests unitaires et tests d'API. **PostgreSQL doit tourner** ; les tests utilisent une base séparée, définie dans `api/.env.test`
+- `npm run test` : tests unitaires et tests d'API. **PostgreSQL doit tourner** ; les tests utilisent une base séparée, définie dans `api/.env.test`, à laquelle Jest applique d'abord les migrations (`globalSetup`)
 - `npm run lint` : ESLint et Prettier ; `npm run format` corrige la mise en forme
 - `npm run build` puis `npm run migrate` : applique les fichiers de `api/migrations/` qui ne figurent pas encore dans la table `schema_migrations`. Le script exécute le code compilé, comme dans le conteneur et dans la CI
 - `npm run build` puis `npm run expire -- --date <date>` : expire les plafonds dont l'échéance est passée à cette date. Le script exécute uniquement le code compilé (`node dist/...`) et ne le compile jamais lui-même, pour fonctionner à l'identique dans le conteneur ; en local, lancer `npm run build` avant. Une date antérieure à l'heure réelle est refusée (H22)

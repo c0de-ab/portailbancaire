@@ -5,7 +5,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  { ignores: ['dist/', 'src/generated/', 'coverage/', 'eslint.config.mjs'] },
+  { ignores: ['dist/', 'coverage/', 'eslint.config.mjs'] },
   js.configs.recommended,
   // Règles qui utilisent les types : promesses non attendues, valeurs « any »…
   tseslint.configs.recommendedTypeChecked,

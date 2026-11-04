@@ -1,7 +1,6 @@
 # Rien de local ne doit entrer dans l'image : dépendances, builds, secrets, énoncé.
 **/node_modules
 **/dist
-api/src/generated
 api/uploads
 **/.env
 **/.env.*

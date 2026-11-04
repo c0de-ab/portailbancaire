@@ -1,16 +1,16 @@
 import { HealthService } from './health.service';
-import type { PrismaService } from '../prisma/prisma.service';
+import type { BaseService } from '../base/base.service';
 
-// Test unitaire : aucune base. Le client Prisma est remplacé par un double
+// Test unitaire : aucune base. Le service d'accès est remplacé par un double
 // qui réussit ou échoue à la demande.
 function serviceAvec(requete: () => Promise<unknown>): HealthService {
-  const prisma = { $queryRaw: requete } as unknown as PrismaService;
-  return new HealthService(prisma);
+  const base = { requete } as unknown as BaseService;
+  return new HealthService(base);
 }
 
 describe('HealthService', () => {
   it('indique ok quand la base répond', async () => {
-    const service = serviceAvec(() => Promise.resolve([{ '?column?': 1 }]));
+    const service = serviceAvec(() => Promise.resolve({ rows: [{ '?column?': 1 }] }));
 
     await expect(service.verifier()).resolves.toEqual({ statut: 'ok', base: 'ok' });
   });

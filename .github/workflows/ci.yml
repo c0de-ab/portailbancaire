@@ -29,7 +29,7 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     env:
-      # Prisma 7 ne charge pas les fichiers .env : même valeur que api/.env.test.
+      # Aucun fichier .env n'est lu dans la CI : même valeur que api/.env.test.
       DATABASE_URL: postgresql://portail:portail@localhost:5432/portail_test
     steps:
       - uses: actions/checkout@v7
@@ -39,10 +39,11 @@ jobs:
           cache: npm
           cache-dependency-path: api/package-lock.json
       - run: npm ci
-      - run: npx prisma generate
       - run: npm run lint
       - run: npx tsc --noEmit
-      - run: npx prisma migrate deploy
+      - run: npm run build
+      # Sur le code compilé, comme dans le conteneur.
+      - run: npm run migrate
       - run: npm run test
 
   web:

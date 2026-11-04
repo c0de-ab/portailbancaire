@@ -14,5 +14,5 @@
     "sourceMap": true,
     "outDir": "./dist"
   },
-  "include": ["src", "test", "prisma.config.ts"]
+  "include": ["src", "test"]
 }
